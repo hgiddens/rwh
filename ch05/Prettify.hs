@@ -94,18 +94,20 @@ fold f = foldr f Empty
 
 (</>) :: Doc -> Doc -> Doc
 x </> y = x <> softline <> y
+    where
+      softline = Union (Char ' ') Line
 
-softline :: Doc
-softline = group Line
-
-group :: Doc -> Doc
-group x = flatten x `Union` x
-
-flatten :: Doc -> Doc
-flatten (Concat x y) = Concat (flatten x) (flatten y)
-flatten Line = Char ' '
-flatten (Union x _) = flatten x
-flatten other = other
+-- softline :: Doc
+-- softline = group Line
+-- 
+-- group :: Doc -> Doc
+-- group x = flatten x `Union` x
+-- 
+-- flatten :: Doc -> Doc
+-- flatten (Concat x y) = Concat (flatten x) (flatten y)
+-- flatten Line = Char ' '
+-- flatten (Union x _) = flatten x
+-- flatten other = other
 
 compact :: Doc -> String
 compact doc = transform [doc]
@@ -141,3 +143,19 @@ fits w _ | w < 0 = False
 fits w "" = True
 fits w ('\n':_) = True
 fits w (c:cs) = fits (w - 1) cs
+
+pad :: Int -> Int -> Doc -> Doc
+pad width col doc = doc <> text (replicate (max 0 (width - col)) '_')
+
+fill :: Int -> Doc -> Doc
+fill width doc = uncurry (pad width) $ fill' 0 doc
+    where
+      fill' :: Int -> Doc -> (Int, Doc)
+      fill' col Empty = (col, Empty)
+      fill' col c@(Char _) = (col + 1, c)
+      fill' col t@(Text s) = (col + length s, t)
+      fill' col Line = (0, pad width col Empty <> Line)
+      fill' col (Concat a b) = let (col', a') = fill' col a
+                                   (col'', b') = fill' col' b
+                               in (col'', Concat a' b')
+      fill' col (Union _ b) = fill' col b
