@@ -155,3 +155,27 @@ fill width doc = uncurry (pad width) $ fill' 0 doc
                                    (col'', b') = fill' col' b
                                in (col'', Concat a' b')
       fill' col (Union _ b) = fill' col b
+
+{- Our pretty printer does not take nesting into account. Whenever we open
+parentheses, braces, or brackets, any lines that follow should be indented so
+that they are aligned with the opening character until a matching closing
+character is encountered. -}
+nest :: Int -> Doc -> Doc
+nest n d= third (nest' [] 0 d)
+    where
+      nest' :: [(Int, Char)] -> Int -> Doc -> ([(Int, Char)], Int, Doc)
+      nest' seen at Empty = (seen, at, Empty)
+      nest' is at c@(Char '[') = ((at,']'):is, at+1, c)
+      nest' is at c@(Char '{') = ((at,'}'):is, at+1, c)
+      nest' ix@((_,ec):is) at c@(Char ac) | ec == ac = (is, at+1, c)
+                                          | otherwise = (ix, at+1, c)
+      nest' is at c@(Char _) = (is, at+1, c)
+      nest' is _ Line = (is, spaces is, Line <> text (replicate (spaces is) ' '))
+      nest' is at (Concat a b) = let (is', at', a') = nest' is at a
+                                     (is'', at'', b') = nest' is' at' b
+                                 in (is'', at'', Concat a' b')
+      nest' is at (Union _ b) = nest' is at b
+
+      spaces ((i,_):_) = i
+      spaces [] = 0
+      third (a,b,c) = c
