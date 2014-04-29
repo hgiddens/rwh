@@ -18,7 +18,6 @@ import Numeric (showHex)
 
 data Doc = Empty
          | Char Char
-         | Text String
          | Line
          | Concat Doc Doc
          | Union Doc Doc
@@ -29,7 +28,7 @@ string = enclose '"' '"' . hcat . map oneChar
 
 text :: String -> Doc
 text "" = Empty
-text s = Text s
+text (c:s) = Char c <> text s
 
 double :: Double -> Doc
 double = text . show
@@ -117,7 +116,6 @@ compact doc = transform [doc]
           case d of
             Empty -> transform ds
             Char c -> c:transform ds
-            Text s -> s ++ transform ds
             Line -> '\n':transform ds
             Concat a b -> transform (a:b:ds)
             Union _ b -> transform (b:ds)
@@ -128,7 +126,6 @@ pretty width x = best 0 [x]
               case d of
                 Empty -> best col ds
                 Char c -> c : best (col + 1) ds
-                Text s -> s ++ best (col + length s) ds
                 Line -> '\n' : best 0 ds
                 Concat a b -> best col (a:b:ds)
                 Union a b -> nicest col (best col (a:ds))
@@ -153,7 +150,6 @@ fill width doc = uncurry (pad width) $ fill' 0 doc
       fill' :: Int -> Doc -> (Int, Doc)
       fill' col Empty = (col, Empty)
       fill' col c@(Char _) = (col + 1, c)
-      fill' col t@(Text s) = (col + length s, t)
       fill' col Line = (0, pad width col Empty <> Line)
       fill' col (Concat a b) = let (col', a') = fill' col a
                                    (col'', b') = fill' col' b
