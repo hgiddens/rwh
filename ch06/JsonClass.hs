@@ -27,6 +27,13 @@ instance JSON Bool where
     fromJValue (JBool b) = Right b
     fromJValue _ = Left "not a JSON boolean"
 
+-- Flexible instances needed here (for [Char]) because apparently Haskell 98
+-- constrains us to have instance for (T a1 a2 …) where ax are all type
+-- variables. This means that [a] would be fine but [Char] isn't. Apparently
+-- FlexibleInstances is pretty reasonable to use.
+--
+-- Furthermore we have TypeSynonymInstances so we can define this in terms of
+-- String rather than in terms of [Char].
 instance JSON String where
     toJValue = JString
     fromJValue (JString s) = Right s
