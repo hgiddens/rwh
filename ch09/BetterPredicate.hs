@@ -1,11 +1,14 @@
 import Control.Applicative ((<$>), (<*>), Alternative, empty, liftA2)
 import Control.Category ((>>>))
 import Control.Exception (IOException, bracket, handle)
-import Control.Monad (filterM, forM, liftM)
-import Data.Time.Clock (UTCTime(..))
-import System.Directory (Permissions(..), getDirectoryContents, getModificationTime, getPermissions)
+import Control.Monad (filterM, forM, liftM, liftM2)
 import System.FilePath ((</>), takeExtension)
 import System.IO (IOMode(..), hClose, hFileSize, openFile)
+
+import System.Posix.Directory (DirStream, closeDirStream, readDirStream, openDirStream)
+import System.Posix.Files (fileMode, fileOwner, fileSize, getFileStatus, modificationTime)
+import qualified System.Posix.Files as PF (isDirectory)
+import System.Posix.Types (EpochTime, FileMode(..), UserID)
 
 import RecursiveContents (getRecursiveContents)
 
@@ -13,7 +16,9 @@ data Info = Info {
       infoPath :: FilePath,
       infoPerms :: Maybe FileMode,
       infoSize :: Maybe Integer,
-      infoModTime :: Maybe UTCTime
+      infoModTime :: Maybe EpochTime,
+      infoOwner :: Maybe UserID,
+      isDirectory :: Bool
     } deriving (Eq, Ord, Show)
 
 data Iterate seed = Done { unwrap :: seed }
@@ -60,10 +65,13 @@ foldTree' iter initSeed path = unwrap <$> fold initSeed path
 
 getInfo :: FilePath -> IO Info
 getInfo path = do
-  perms <- maybeIO $ getPermissions path
-  size <- maybeIO $ bracket (openFile path ReadMode) hClose hFileSize
-  modified <- maybeIO $ getModificationTime path
-  return $ Info path perms size modified
+  status <- maybeIO $ getFileStatus path
+  let perms = fmap fileMode status
+  let size = fmap (toInteger . fileSize) status
+  let modified = fmap modificationTime status
+  let owner = fmap fileOwner status
+  let isDir = maybe False PF.isDirectory status
+  return $ Info path perms size modified owner isDir
     where
       maybeIO = handle ignoreError . liftM Just
 
@@ -75,13 +83,17 @@ traverse order path = do names <- getUsefulContents path
                            then traverse order (infoPath info)
                            else return [info]
 
-isDirectory :: Info -> Bool
-isDirectory = maybe False searchable . infoPerms
-
 getUsefulContents :: FilePath -> IO [String]
-getUsefulContents pth = do
-  names <- getDirectoryContents pth
-  return $ filter (`notElem` [".", ".."]) names
+getUsefulContents path = handle ignoreError $
+                            bracket (openDirStream path) closeDirStream dirContents
+    where
+      dirContents dir = do
+        entry <- readDirStream dir
+        case entry of
+          "" -> return []
+          "." -> dirContents dir
+          ".." -> dirContents dir
+          entry -> liftM2 (:) (return entry) (dirContents dir)
 
 traverse' :: ([Info] -> [Info]) -> (Info -> Bool) -> FilePath -> IO [Info]
 traverse' conv pred = traverse order
@@ -140,6 +152,9 @@ sizeP :: Info -> Integer
 --sizeP _ _ (Just size) _ = size
 --sizeP _ _ _ _ = -1
 sizeP = fmap (maybe (-1) id) infoSize
+
+ownerP :: Info -> Maybe UserID
+ownerP = infoOwner
 
 equalP, (==?) :: Eq a => (Info -> a) -> a -> (Info -> Bool)
 --equalP f k = \w x y z -> f w x y z == k
