@@ -3,6 +3,7 @@ module Glob (namesMatching) where
 
 import Control.Exception (Exception, IOException, handle)
 import Control.Monad (forM)
+import Data.List (isSuffixOf)
 import GlobRegex (matchesGlob)
 import System.Directory (doesDirectoryExist, doesFileExist,
                          getCurrentDirectory, getDirectoryContents)
@@ -22,9 +23,7 @@ namesMatching pat
               do curDir <- getCurrentDirectory
                  listMatches curDir baseName
           (dirName, baseName) ->
-              do dirs <- if isPattern dirName
-                        then namesMatching (dropTrailingPathSeparator dirName)
-                        else return [dirName]
+              do dirs <- dirnames dirName
                  let listDir = if isPattern baseName
                                then listMatches
                                else listPlain
@@ -32,6 +31,18 @@ namesMatching pat
                                do baseNames <- listDir dir baseName
                                   return (map (dir </>) baseNames)
                  return (concat pathNames)
+
+dirnames :: String -> IO [String]
+dirnames dirName
+    | "/**/" `isSuffixOf` dirName =
+        let up = dropTrailingPathSeparator . fst . splitFileName
+            dir = up dirName
+        in do a <- namesMatching $ up dir
+              b <- namesMatching (dir ++ "*")
+              c <- namesMatching (dir ++ "*/**")
+              return $ a ++ b ++ c
+    | isPattern dirName = namesMatching (dropTrailingPathSeparator dirName)
+    | otherwise = return [dirName]
 
 listMatches :: FilePath -> String -> IO [String]
 listMatches dirName pat =
