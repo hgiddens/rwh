@@ -1,6 +1,7 @@
 module Prettify2 (Doc(..), (<>), char, double, empty, hcat, line, punctuate, text) where
 
 import Data.List (intersperse)
+import Data.Monoid (Monoid, mappend, mempty)
 
 data Doc = Empty
          | Char Char
@@ -9,6 +10,10 @@ data Doc = Empty
          | Concat Doc Doc
          | Union Doc Doc
            deriving (Eq, Show)
+
+instance Monoid Doc where
+    mempty = empty
+    mappend = (<>)
 
 empty :: Doc
 empty = Empty

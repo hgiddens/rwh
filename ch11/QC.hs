@@ -2,9 +2,10 @@
 
 import Control.Monad (liftM, liftM2)
 import Data.List (intersperse)
+import Data.Monoid (mappend, mempty)
 import Prettify2
-import Test.Framework (defaultMain, testGroup)
-import Test.Framework.Providers.QuickCheck
+--import Test.Framework (defaultMain, testGroup)
+--import Test.Framework.Providers.QuickCheck
 import Test.QuickCheck
 
 instance Arbitrary Doc where
@@ -34,7 +35,12 @@ prop_punctuate s xs = punctuate s xs == combine (intersperse s xs)
       combine (Empty:x:xs) = x:combine xs
       combine (x:y:xs) = x `Concat` y : combine xs
 
--- runTests = $quickCheckAll
+prop_mappend :: Doc -> Doc -> Bool
+prop_mappend x y = x `mappend` y == x <> y
 
-main = defaultMain tests
-tests = []
+prop_mempty_id :: Doc -> Bool
+prop_mempty_id x = x `mappend` mempty == x && mempty `mappend` x == x
+
+runTests = $quickCheckAll
+
+main = runTests
