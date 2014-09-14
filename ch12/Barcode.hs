@@ -1,8 +1,10 @@
+import Control.Arrow ((&&&))
 import Control.Applicative ((<$>), (<*>))
 import Control.Monad (forM_, replicateM)
 import Data.Array (Array(..), (!), bounds, elems, indices, ixmap, listArray)
 import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (digitToInt)
+import Data.Function (on)
 import Data.Ix (Ix(..))
 import Data.List (foldl', group, sort, sortBy, tails)
 import qualified Data.Map as M
@@ -106,3 +108,173 @@ type Greymap = Array (Int, Int) Pixel
 
 pixmapToGreymap :: Pixmap -> Greymap
 pixmapToGreymap = fmap luminance
+
+data Bit = Zero | One deriving (Eq, Show)
+
+threshold :: (Ix k, Integral a) => Double -> Array k a -> Array k Bit
+threshold n a = binary <$> a
+    where binary i | i < pivot = Zero
+                   | otherwise = One
+          pivot = round $ least + (greatest - least) * n
+          least = fromIntegral $ choose (<) a
+          greatest = fromIntegral $ choose (>) a
+          choose f = foldA1 $ \x y -> if f x y then x else y
+
+type Run = Int
+type RunLength a = [(Run, a)]
+
+runLength :: Eq a => [a] -> RunLength a
+runLength = map rle . group
+    where rle = length &&& head
+
+runLengths :: Eq a => [a] -> [Run]
+runLengths = map fst . runLength
+
+type Score = Ratio Int
+
+scaleToOne :: [Run] -> [Score]
+scaleToOne xs = map divide xs
+    where divide d = fromIntegral d / divisor
+          divisor = fromIntegral (sum xs)
+
+type ScoreTable = [[Score]]
+
+asSRL :: [String] -> ScoreTable
+asSRL = map (scaleToOne . runLengths)
+
+leftOddSRL = asSRL leftOddList
+leftEvenSRL = asSRL leftEvenList
+rightSRL = asSRL rightList
+paritySRL = asSRL parityList
+
+distance :: [Score] -> [Score] -> Score
+distance a b = sum . map abs $ zipWith (-) a b
+
+bestScores :: ScoreTable -> [Run] -> [(Score, Digit)]
+bestScores srl ps = take 3 . sort $ scores
+    where
+      scores = zip [distance d (scaleToOne ps) | d <- srl] digits
+      digits = [0..9]
+
+data Parity a = Even a | Odd a | None a deriving (Show)
+
+fromParity :: Parity a -> a
+fromParity (Even a) = a
+fromParity (Odd a) = a
+fromParity (None a) = a
+
+parityMap :: (a -> b) -> Parity a -> Parity b
+parityMap f (Even a) = Even (f a)
+parityMap f (Odd a) = Odd (f a)
+parityMap f (None a) = None (f a)
+
+instance Functor Parity where
+    fmap = parityMap
+
+type Digit = Word8
+
+compareWithoutParity :: Ord a => Parity a -> Parity a -> Ordering
+compareWithoutParity = compare `on` fromParity
+
+bestLeft :: [Run] -> [Parity (Score, Digit)]
+bestLeft ps = sortBy compareWithoutParity (oddScores ps ++ evenScores ps)
+    where oddScores = map Odd . bestScores leftOddSRL
+          evenScores = map Even . bestScores leftEvenSRL
+          -- oddScores &&& evenScores >>> (uncurry (++)) $ ps
+
+bestRight :: [Run] -> [Parity (Score, Digit)]
+bestRight = map None . bestScores rightSRL
+              
+data AltParity a = AltEven { fromAltParity :: a }
+                 | AltOdd { fromAltParity :: a }
+                 | AltNone { fromAltParity :: a }
+                   deriving (Show)
+
+chunkWith :: ([a] -> ([a], [a])) -> [a] -> [[a]]
+chunkWith _ [] = []
+chunkWith f xs = let (h, t) = f xs
+                 in h : chunkWith f t
+
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf n = chunkWith (splitAt n)
+                   
+candidateDigits :: RunLength Bit -> [[Parity Digit]]
+candidateDigits ((_, One):_) = []
+candidateDigits rle | length rle < 59 = []
+                    | any null match = []
+                    | otherwise = map (map (fmap snd)) match
+    where match = map bestLeft left ++ map bestRight right
+          left = chunksOf 4 . take 24 . drop 3 $ runLengths
+          right = chunksOf 4 . take 24 . drop 32 $ runLengths
+          runLengths = map fst rle
+
+type Map a = M.Map Digit [a]
+type DigitMap = Map Digit
+type ParityMap = Map (Parity Digit)
+
+updateMap :: Parity Digit -> Digit -> [Parity Digit] -> ParityMap -> ParityMap
+updateMap digit key seq = insertMap key (fromParity digit) (digit:seq)
+
+insertMap :: Digit -> Digit -> [a] -> Map a -> Map a
+insertMap key digit val m = val `seq` M.insert key' val m
+    where key' = (key + digit) `mod` 10
+
+useDigit :: ParityMap -> ParityMap -> Parity Digit -> ParityMap
+useDigit old new digit = new `M.union` M.foldWithKey (updateMap digit) M.empty old
+
+incorporateDigits :: ParityMap -> [Parity Digit] -> ParityMap
+incorporateDigits old digits = foldl' (useDigit old) M.empty digits
+
+finalDigits :: [[Parity Digit]] -> ParityMap
+finalDigits = foldl' incorporateDigits (M.singleton 0 []) . (mapEveryOther . map . fmap $ (* 3))
+
+firstDigit :: [Parity a] -> Digit
+firstDigit = snd . head . bestScores paritySRL . runLengths . map parityBit . take 6
+    where parityBit (Even _) = Zero
+          parityBit (Odd _) = One
+
+addFirstDigit :: ParityMap -> DigitMap
+addFirstDigit = M.foldWithKey updateFirst M.empty
+
+updateFirst :: Digit -> [Parity Digit] -> DigitMap -> DigitMap
+updateFirst key seq = insertMap key digit (digit:renormalize qes)
+    where renormalize = mapEveryOther (`div` 3) . map fromParity
+          digit = firstDigit qes
+          qes = reverse seq
+
+buildMap :: [[Parity Digit]] -> DigitMap
+buildMap = M.mapKeys (10 -) . addFirstDigit . finalDigits
+
+solve :: [[Parity Digit]] -> [[Digit]]
+solve [] = []
+solve xs = catMaybes $ map (addCheckDigit m) checkDigits
+    where checkDigits = map fromParity (last xs)
+          m = buildMap (init xs)
+          addCheckDigit m k = (++ [k]) <$> M.lookup k m
+
+withRow :: Int -> Pixmap -> (RunLength Bit -> a) -> a
+withRow n greymap f = f . runLength . elems $ posterized
+    where posterized = threshold 0.4 . fmap luminance . row n $ greymap
+
+row :: (Ix a, Ix b) => b -> Array (a,b) c -> Array a c
+row j a = ixmap (l,u) project a
+    where project i = (i,j)
+          ((l,_), (u,_)) = bounds a
+
+findMatch :: [(Run, Bit)] -> Maybe [[Digit]]
+findMatch = listToMaybe . filter (not . null) . map (solve . candidateDigits) . tails
+
+findEAN13 :: Pixmap -> Maybe [Digit]
+findEAN13 pixmap = withRow center pixmap (fmap head . findMatch)
+    where (_, (maxX, _)) = bounds pixmap
+          center = (maxX + 1) `div` 2
+
+main :: IO ()
+main = do
+  args <- getArgs
+  forM_ args $ \arg -> do
+         e <- parse parseRawPPM <$> L.readFile arg
+         case e of
+           Left err -> print $ "error: " ++ err
+           Right pixmap -> print $ findEAN13 pixmap
+
